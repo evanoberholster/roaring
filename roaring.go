@@ -11,7 +11,8 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"sync"
+
+	"github.com/RoaringBitmap/roaring/internal"
 )
 
 // Bitmap represents a compressed bitmap where you can add integers.
@@ -52,27 +53,16 @@ func (rb *Bitmap) ToBytes() ([]byte, error) {
 	return rb.highlowcontainer.toBytes()
 }
 
-// Deprecated: WriteToMsgpack writes a msgpack2/snappy-streaming compressed serialized
-// version of this bitmap to stream. The format is not
-// compatible with the WriteTo() format, and is
-// experimental: it may produce smaller on disk
-// footprint and/or be faster to read, depending
-// on your content. Currently only the Go roaring
-// implementation supports this format.
-func (rb *Bitmap) WriteToMsgpack(stream io.Writer) (int64, error) {
-	return 0, rb.highlowcontainer.writeToMsgpack(stream)
-}
-
 // ReadFrom reads a serialized version of this bitmap from stream.
 // The format is compatible with other RoaringBitmap
 // implementations (Java, C) and is documented here:
 // https://github.com/RoaringBitmap/RoaringFormatSpec
 func (rb *Bitmap) ReadFrom(reader io.Reader) (p int64, err error) {
-	stream := byteInputAdapterPool.Get().(*byteInputAdapter)
-	stream.reset(reader)
+	stream := internal.ByteInputAdapterPool.Get().(*internal.ByteInputAdapter)
+	stream.Reset(reader)
 
 	p, err = rb.highlowcontainer.readFrom(stream)
-	byteInputAdapterPool.Put(stream)
+	internal.ByteInputAdapterPool.Put(stream)
 
 	return
 }
@@ -100,28 +90,14 @@ func (rb *Bitmap) ReadFrom(reader io.Reader) (p int64, err error) {
 // call CloneCopyOnWriteContainers on all such bitmaps.
 //
 func (rb *Bitmap) FromBuffer(buf []byte) (p int64, err error) {
-	stream := byteBufferPool.Get().(*byteBuffer)
-	stream.reset(buf)
+	stream := internal.ByteBufferPool.Get().(*internal.ByteBuffer)
+	stream.Reset(buf)
 
 	p, err = rb.highlowcontainer.readFrom(stream)
-	byteBufferPool.Put(stream)
+	internal.ByteBufferPool.Put(stream)
 
 	return
 }
-
-var (
-	byteBufferPool = sync.Pool{
-		New: func() interface{} {
-			return &byteBuffer{}
-		},
-	}
-
-	byteInputAdapterPool = sync.Pool{
-		New: func() interface{} {
-			return &byteInputAdapter{}
-		},
-	}
-)
 
 // RunOptimize attempts to further compress the runs of consecutive values found in the bitmap
 func (rb *Bitmap) RunOptimize() {
@@ -131,14 +107,6 @@ func (rb *Bitmap) RunOptimize() {
 // HasRunCompression returns true if the bitmap benefits from run compression
 func (rb *Bitmap) HasRunCompression() bool {
 	return rb.highlowcontainer.hasRunCompression()
-}
-
-// Deprecated: ReadFromMsgpack reads a msgpack2/snappy-streaming serialized
-// version of this bitmap from stream. The format is
-// expected is that written by the WriteToMsgpack()
-// call; see additional notes there.
-func (rb *Bitmap) ReadFromMsgpack(stream io.Reader) (int64, error) {
-	return 0, rb.highlowcontainer.readFromMsgpack(stream)
 }
 
 // MarshalBinary implements the encoding.BinaryMarshaler interface for the bitmap
@@ -345,8 +313,10 @@ func newIntReverseIterator(a *Bitmap) *intReverseIterator {
 
 // ManyIntIterable allows you to iterate over the values in a Bitmap
 type ManyIntIterable interface {
-	// pass in a buffer to fill up with values, returns how many values were returned
-	NextMany([]uint32) int
+	// NextMany fills buf up with values, returns how many values were returned
+	NextMany(buf []uint32) int
+	// NextMany64 fills up buf with 64 bit values, uses hs as a mask (OR), returns how many values were returned
+	NextMany64(hs uint64, buf []uint64) int
 }
 
 type manyIntIterator struct {
@@ -372,6 +342,25 @@ func (ii *manyIntIterator) NextMany(buf []uint32) int {
 			break
 		}
 		moreN := ii.iter.nextMany(ii.hs, buf[n:])
+		n += moreN
+		if moreN == 0 {
+			ii.pos = ii.pos + 1
+			ii.init()
+		}
+	}
+
+	return n
+}
+
+func (ii *manyIntIterator) NextMany64(hs64 uint64, buf []uint64) int {
+	n := 0
+	for n < len(buf) {
+		if ii.iter == nil {
+			break
+		}
+
+		hs := uint64(ii.hs) | hs64
+		moreN := ii.iter.nextMany64(hs, buf[n:])
 		n += moreN
 		if moreN == 0 {
 			ii.pos = ii.pos + 1
@@ -985,7 +974,7 @@ main:
 				}
 				s2 = x2.highlowcontainer.getKeyAtIndex(pos2)
 			} else {
-				rb.highlowcontainer.replaceKeyAndContainerAtIndex(pos1, s1, rb.highlowcontainer.getWritableContainerAtIndex(pos1).ior(x2.highlowcontainer.getContainerAtIndex(pos2)), false)
+				rb.highlowcontainer.replaceKeyAndContainerAtIndex(pos1, s1, rb.highlowcontainer.getUnionedWritableContainer(pos1, x2.highlowcontainer.getContainerAtIndex(pos2)), false)
 				pos1++
 				pos2++
 				if (pos1 == length1) || (pos2 == length2) {

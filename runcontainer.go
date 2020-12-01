@@ -44,8 +44,6 @@ import (
 	"unsafe"
 )
 
-//go:generate msgp -unexported
-
 // runContainer16 does run-length encoding of sets of
 // uint16 integers.
 type runContainer16 struct {
@@ -119,8 +117,6 @@ func (p uint16Slice) Less(i, j int) bool { return p[i] < p[j] }
 
 // Swap swaps elements i and j.
 func (p uint16Slice) Swap(i, j int) { p[i], p[j] = p[j], p[i] }
-
-//msgp:ignore addHelper
 
 // addHelper helps build a runContainer16.
 type addHelper16 struct {
@@ -1147,8 +1143,6 @@ func (rc *runContainer16) Add(k uint16) (wasNew bool) {
 	return
 }
 
-//msgp:ignore runIterator
-
 // runIterator16 advice: you must call hasNext()
 // before calling next()/peekNext() to insure there are contents.
 type runIterator16 struct {
@@ -1300,6 +1294,47 @@ func (ri *runIterator16) nextMany(hs uint32, buf []uint32) int {
 			buf2 := buf[n : n+moreVals]
 			for i := range buf2 {
 				buf2[i] = base + uint32(i)
+			}
+
+			// update values
+			n += moreVals
+		}
+
+		if moreVals+int(ri.curPosInIndex) > int(ri.rc.iv[ri.curIndex].length) {
+			ri.curPosInIndex = 0
+			ri.curIndex++
+
+			if ri.curIndex == int64(len(ri.rc.iv)) {
+				break
+			}
+		} else {
+			ri.curPosInIndex += uint16(moreVals) //moreVals always fits in uint16
+		}
+	}
+
+	return n
+}
+
+func (ri *runIterator16) nextMany64(hs uint64, buf []uint64) int {
+	n := 0
+
+	if !ri.hasNext() {
+		return n
+	}
+
+	// start and end are inclusive
+	for n < len(buf) {
+		moreVals := 0
+
+		if ri.rc.iv[ri.curIndex].length >= ri.curPosInIndex {
+			// add as many as you can from this seq
+			moreVals = minOfInt(int(ri.rc.iv[ri.curIndex].length-ri.curPosInIndex)+1, len(buf)-n)
+			base := uint64(ri.rc.iv[ri.curIndex].start+ri.curPosInIndex) | hs
+
+			// allows BCE
+			buf2 := buf[n : n+moreVals]
+			for i := range buf2 {
+				buf2[i] = base + uint64(i)
 			}
 
 			// update values

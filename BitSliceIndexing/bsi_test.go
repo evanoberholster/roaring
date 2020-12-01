@@ -2,7 +2,7 @@ package roaring
 
 import (
 	_ "fmt"
-	_ "github.com/RoaringBitmap/roaring"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"io/ioutil"
@@ -187,6 +187,17 @@ func TestParOr(t *testing.T) {
 	assert.Equal(t, uint64(200), bsi1.eBM.GetCardinality())
 }
 
+func TestNewBSIRetainSet(t *testing.T) {
+
+	bsi := setup()
+	foundSet := roaring.BitmapOf(50)
+	newBSI := bsi.NewBSIRetainSet(foundSet)
+	assert.Equal(t, uint64(1), newBSI.GetCardinality())
+	val, ok := newBSI.GetValue(50)
+	assert.True(t, ok)
+	assert.Equal(t, val, int64(50))
+}
+
 func TestLargeFile(t *testing.T) {
 
 	datEBM, err := ioutil.ReadFile("./testdata/age/EBM")
@@ -224,4 +235,56 @@ func TestLargeFile(t *testing.T) {
 	resultC := bsi.BatchEqual(0, []int64{55, 57})
 	assert.Equal(t, uint64(486001), resultC.GetCardinality())
 
+}
+
+func TestClone(t *testing.T) {
+	bsi := setup()
+	clone := bsi.Clone()
+	for i := 0; i < int(bsi.MaxValue); i++ {
+		a, _ := bsi.GetValue(uint64(i))
+		b, _ := clone.GetValue(uint64(i))
+		assert.Equal(t, a, b)
+	}
+}
+
+func TestAdd(t *testing.T) {
+	bsi := NewDefaultBSI()
+	// Setup values
+	for i := 1; i <= 10; i++ {
+		bsi.SetValue(uint64(i), int64(i))
+	}
+	clone := bsi.Clone()
+	bsi.Add(clone)
+	assert.Equal(t, uint64(10), bsi.GetCardinality())
+	for i := 1; i <= 10; i++ {
+		a, _ := bsi.GetValue(uint64(i))
+		b, _ := clone.GetValue(uint64(i))
+		assert.Equal(t, b*2, a)
+	}
+
+}
+
+func TestIncrement(t *testing.T) {
+	bsi := setup()
+	bsi.IncrementAll()
+	for i := 0; i < int(bsi.MaxValue); i++ {
+		a, _ := bsi.GetValue(uint64(i))
+		assert.Equal(t, int64(i+1), a)
+	}
+	bsi.Increment(roaring.BitmapOf(0))
+	x, _ := bsi.GetValue(uint64(0))
+	assert.Equal(t, int64(2), x)
+	for i := 1; i < int(bsi.MaxValue); i++ {
+		a, _ := bsi.GetValue(uint64(i))
+		assert.Equal(t, int64(i+1), a)
+	}
+}
+
+func TestTransposeWithCounts(t *testing.T) {
+	bsi := setup()
+	bsi.SetValue(101, 50)
+	transposed := bsi.TransposeWithCounts(0, bsi.GetExistenceBitmap())
+	a, ok := transposed.GetValue(uint64(50))
+	assert.True(t, ok)
+	assert.Equal(t, int64(2), a)
 }
